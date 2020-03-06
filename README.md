@@ -171,6 +171,16 @@ y_train = y_train.astype('int64').reshape(len_train)
 y_test = y_test.astype('int64').reshape(len_test)
 ```
 
+#### Data AUG
+x_train.shape = (50000, 40, 40, 3)
+
+Data augmentation strategy is as follows:
+- Take 32x32 Random crops using *tf.random_crop*
+- Flip the image along the horizontal axis using *tf.image.random_flip_left_right*
+```python
+data_aug = lambda x, y: (tf.image.random_flip_left_right(tf.random_crop(x, [32, 32, 3])), y)
+```
+
 #### Define LR and optim schedule
 ```python
 lr_schedule = lambda t: np.interp([t], [0, (EPOCHS+1)//5, EPOCHS], [0, LEARNING_RATE, 0])[0]
@@ -189,13 +199,43 @@ The y-coordinates of the data points, same length as xp.
 
 ```python
 # Compute how many batches make an Epoch
-
 batches_per_epoch = len_train//BATCH_SIZE + 1
 lr_schedule = lambda t: np.interp([t], [0, (EPOCHS+1)//5, EPOCHS], [0, LEARNING_RATE, 0])[0]
 global_step = tf.train.get_or_create_global_step()
 lr_func = lambda: lr_schedule(global_step/batches_per_epoch)/BATCH_SIZE
 opt = tf.train.MomentumOptimizer(lr_func, momentum=MOMENTUM, use_nesterov=True)
-data_aug = lambda x, y: (tf.image.random_flip_left_right(tf.random_crop(x, [32, 32, 3])), y)
+```
+#### Training Loop
+
+```python
+t = time.time()  
+test_set = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(BATCH_SIZE)  
+  
+for epoch in range(EPOCHS):  
+  train_loss = test_loss = train_acc = test_acc = 0.0  
+  train_set = tf.data.Dataset.from_tensor_slices((x_train, y_train)).map(data_aug).shuffle(len_train).batch(BATCH_SIZE).prefetch(1)  
+  
+  tf.keras.backend.set_learning_phase(1)  
+  for (x, y) in tqdm(train_set):  
+    with tf.GradientTape() as tape:  
+      loss, correct = model(x, y)  
+  
+    var = model.trainable_variables  
+    grads = tape.gradient(loss, var)  
+    for g, v in zip(grads, var):  
+      g += v * WEIGHT_DECAY * BATCH_SIZE  
+    opt.apply_gradients(zip(grads, var), global_step=global_step)  
+  
+    train_loss += loss.numpy()  
+    train_acc += correct.numpy()  
+  
+  tf.keras.backend.set_learning_phase(0)  
+  for (x, y) in test_set:  
+    loss, correct = model(x, y)  
+    test_loss += loss.numpy()  
+    test_acc += correct.numpy()  
+  
+  print('epoch:', epoch+1, 'train loss:', train_loss / len_train, 'train acc:', train_acc / len_train, 'val loss:', test_loss / len_test, 'val acc:', test_acc / len_test, 'time:', time.time() - t)
 ```
 
 [davidnet]:https://miro.medium.com/max/2698/1*uKqdR2jn83pOhTEMLHQpJQ.png "David Net Architecture"
